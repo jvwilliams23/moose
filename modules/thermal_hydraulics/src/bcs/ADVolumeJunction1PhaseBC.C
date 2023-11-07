@@ -10,7 +10,7 @@
 #include "ADVolumeJunction1PhaseBC.h"
 #include "ADVolumeJunction1PhaseUserObject.h"
 #include "VolumeJunction1Phase.h"
-#include "THMIndices3Eqn.h"
+#include "THMIndicesVACE.h"
 
 registerMooseObject("ThermalHydraulicsApp", ADVolumeJunction1PhaseBC);
 
@@ -80,9 +80,9 @@ std::map<unsigned int, unsigned int>
 ADVolumeJunction1PhaseBC::getFlowChannelIndexMapping() const
 {
   std::map<unsigned int, unsigned int> jvar_map;
-  jvar_map.insert(std::pair<unsigned int, unsigned int>(_rhoA_jvar, THM3Eqn::EQ_MASS));
-  jvar_map.insert(std::pair<unsigned int, unsigned int>(_rhouA_jvar, THM3Eqn::EQ_MOMENTUM));
-  jvar_map.insert(std::pair<unsigned int, unsigned int>(_rhoEA_jvar, THM3Eqn::EQ_ENERGY));
+  jvar_map.insert(std::pair<unsigned int, unsigned int>(_rhoA_jvar, THMVACE1D::MASS));
+  jvar_map.insert(std::pair<unsigned int, unsigned int>(_rhouA_jvar, THMVACE1D::MOMENTUM));
+  jvar_map.insert(std::pair<unsigned int, unsigned int>(_rhoEA_jvar, THMVACE1D::ENERGY));
 
   return jvar_map;
 }
