@@ -978,8 +978,8 @@ MultiAppNearestNodeTransferJW::execute()
 
                 if (_distance_weighted_average)
                 {
-                  sum_of_dists = sum_of_dists + dof_dist;
-                  sum_of_val_dist_product = (dof_dist*dof_val) + sum_of_val_dist_product;
+                  sum_of_dists = sum_of_dists + 1.0/dof_dist;
+                  sum_of_val_dist_product = (dof_val/dof_dist) + sum_of_val_dist_product;
                 }
                 else
                 {
