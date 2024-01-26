@@ -26,7 +26,7 @@
 // TIMPI includes
 #include "timpi/parallel_sync.h"
 
-registerMooseObjectDeprecated("MooseApp", MultiAppNearestNodeTransferJW, "12/31/2024 24:00");
+registerMooseObject("MooseApp", MultiAppNearestNodeTransferJW);
 
 InputParameters
 MultiAppNearestNodeTransferJW::validParams()
@@ -47,6 +47,16 @@ MultiAppNearestNodeTransferJW::validParams()
                         "no movement or adaptivity).  This will cache "
                         "nearest node neighbors to greatly speed up the "
                         "transfer.");
+  params.addParam<bool>("distance_weighted_average",
+                        true,
+                        "Set to true when we want to compute average value "
+                        "of neighbouring points based on distance "
+                        "(rather than simply the mean of all nearby points)");
+  params.addParam<Real>("nearest_multiplier",
+                        1.1,
+                        "Value to multiply nearest distance used for "
+                        "including quad points in the averaging before sending "
+                        );
 
   MultiAppTransfer::addBBoxFactorParam(params);
   return params;
@@ -55,6 +65,8 @@ MultiAppNearestNodeTransferJW::validParams()
 MultiAppNearestNodeTransferJW::MultiAppNearestNodeTransferJW(const InputParameters & parameters)
   : MultiAppConservativeTransfer(parameters),
     _fixed_meshes(getParam<bool>("fixed_meshes")),
+    _distance_weighted_average(getParam<bool>("distance_weighted_average")),
+    _nearest_multiplier(getParam<Real>("nearest_multiplier")),
     _node_map(declareRestartableData<std::map<dof_id_type, Node *>>("node_map")),
     _distance_map(declareRestartableData<std::map<dof_id_type, Real>>("distance_map")),
     _neighbors_cached(declareRestartableData<bool>("neighbors_cached", false)),
@@ -67,10 +79,29 @@ MultiAppNearestNodeTransferJW::MultiAppNearestNodeTransferJW(const InputParamete
             "cached_from_ids")),
     _cached_qp_inds(
         declareRestartableData<std::map<std::pair<unsigned int, dof_id_type>, unsigned int>>(
-            "cached_qp_inds"))
+            "cached_qp_inds")),
+    _cached_min_dist(
+        declareRestartableData<std::map<processor_id_type, std::vector<Real>>>(
+            "cached_min_dist")),
+    _cached_nearby_from_dof_ids(declareRestartableData<std::map<processor_id_type, std::vector<std::vector<dof_id_type>>>>(
+        "cached_ids_within_min_dist")),
+    _cached_nearby_from_dof_dists(declareRestartableData<std::map<processor_id_type, std::vector<std::vector<Real>>>>(
+        "cached_nearby_from_dof_dists"))
+    // _cached_min_dist(
+    //     declareRestartableData<std::map<std::pair<unsigned int, Real>, unsigned int>>(
+    //         "cached_min_dist"))//,
+    // _cached_qp_inds_in_dist(
+    //     declareRestartableData<std::map<std::pair<unsigned int, dof_id_type>, unsigned int>>(
+    //         "cached_qp_inds_in_dist"))
+
+
+
+
 {
-  mooseDeprecated("MultiAppNearestNodeTransferJW is deprecated. Use "
-                  "MultiAppGeneralFieldNearestNodeTransfer instead and adapt the parameters");
+  // mooseDeprecated("MultiAppNearestNodeTransferJW is deprecated. Use "
+  //                 "MultiAppGeneralFieldNearestNodeTransfer instead and adapt the parameters");
+
+  // std::cout << "fixed meshes is " << _fixed_meshes << std::endl;
 
   if (_to_var_names.size() != 1)
     paramError("variable", " Support single to-variable only");
@@ -154,63 +185,7 @@ MultiAppNearestNodeTransferJW::execute()
 
       if (is_to_nodal)
       {
-        const std::vector<Node *> & target_local_nodes = getTargetLocalNodes(i_to);
-
-        // For error checking: keep track of all target_local_nodes
-        // which are successfully mapped to at least one domain where
-        // the nearest neighbor might be found.
-        std::set<Node *> local_nodes_found;
-
-        for (const auto & node : target_local_nodes)
-        {
-          // Skip this node if the variable has no dofs at it.
-          if (node->n_dofs(sys_num, var_num) < 1)
-            continue;
-
-          const auto transformed_node = to_transform(*node);
-
-          // Find which bboxes might have the nearest node to this point.
-          Real nearest_max_distance = std::numeric_limits<Real>::max();
-          for (const auto & bbox : bboxes)
-          {
-            Real distance = bboxMaxDistance(transformed_node, bbox);
-            if (distance < nearest_max_distance)
-              nearest_max_distance = distance;
-          }
-
-          unsigned int from0 = 0;
-          for (processor_id_type i_proc = 0; i_proc < n_processors();
-               from0 += froms_per_proc[i_proc], i_proc++)
-          {
-            for (unsigned int i_from = from0; i_from < from0 + froms_per_proc[i_proc]; i_from++)
-            {
-              Real distance = bboxMinDistance(transformed_node, bboxes[i_from]);
-
-              if (distance <= nearest_max_distance ||
-                  bboxes[i_from].contains_point(transformed_node))
-              {
-                std::pair<unsigned int, dof_id_type> key(i_to, node->id());
-                // Record a local ID for each quadrature point
-                node_index_map[i_proc][key] = outgoing_qps[i_proc].size();
-                outgoing_qps[i_proc].push_back(transformed_node);
-                local_nodes_found.insert(node);
-              }
-            }
-          }
-        }
-
-        // By the time we get to here, we should have found at least
-        // one candidate BoundingBox for every node in the
-        // target_local_nodes array that has dofs for the current
-        // variable in the current System.
-        for (const auto & node : target_local_nodes)
-          if (node->n_dofs(sys_num, var_num) && !local_nodes_found.count(node))
-            mooseError("In ",
-                       name(),
-                       ": No candidate BoundingBoxes found for node ",
-                       node->id(),
-                       " at position ",
-                       to_transform(*node));
+        mooseError("is_to_nodal not implemented");
       }
       else // Elemental
       {
@@ -354,6 +329,8 @@ MultiAppNearestNodeTransferJW::execute()
       // Store data for late use
       incoming_qps_from_pid.reserve(incoming_qps_from_pid.size() + qps.size());
       std::copy(qps.begin(), qps.end(), std::back_inserter(incoming_qps_from_pid));
+      // std::cout << "size incoming_qps[i_proc] is " << incoming_qps[pid].size() << std::endl;
+
     };
 
     Parallel::push_parallel_vector_data(comm(), outgoing_qps, qps_action_functor);
@@ -371,6 +348,22 @@ MultiAppNearestNodeTransferJW::execute()
         auto & dof_ids = _cached_dof_ids[pid];
         dof_ids.resize(qps.second.size());
         std::fill(dof_ids.begin(), dof_ids.end(), DofObject::invalid_id);
+
+        auto & min_dists = _cached_min_dist[pid];
+        min_dists.resize(qps.second.size());
+        std::fill(min_dists.begin(), min_dists.end(), 0.0);
+        
+        auto & min_dist_ids = _cached_nearby_from_dof_ids[pid];
+        min_dist_ids.resize(qps.second.size());
+
+        auto & nearby_dists = _cached_nearby_from_dof_dists[pid];
+        nearby_dists.resize(qps.second.size());
+
+        // std::fill(min_dist_ids.begin(), min_dis)
+        // for (int i=0; i< min_dist_ids.size(); ++i)
+        // {
+        //   _cached_nearby_from_dof_ids[pid][i]; // FIXME:
+        // }
       }
 
       std::vector<Real> & outgoing_evals = processor_outgoing_evals[pid];
@@ -402,7 +395,7 @@ MultiAppNearestNodeTransferJW::execute()
             Real current_distance =
                 (qpt - from_transform(local_entities[i_local_from][i_node].first)).norm();
 
-            std::cout << "    qp: " << qp << " current distance: " << current_distance << std::endl;
+            // std::cout << "    qp: " << qp << " current distance: " << current_distance << "   pid: " << pid << std::endl;
 
             // If an incoming_qp is equally close to two or more local nodes, then
             // the first one we test will "win", even though any of the others could
@@ -434,13 +427,15 @@ MultiAppNearestNodeTransferJW::execute()
                 {
                   // Cache the nearest nodes.
                   _cached_froms[pid][qp] = i_local_from;
+                  // std::cout << "setting _cached_froms[pid = " << pid << "][qp = " << qp << "] = " << i_local_from << std::endl;
                   _cached_dof_ids[pid][qp] = from_dof;
+                  _cached_min_dist[pid][qp] = 0.0;
                 }
               }
             }
           }
         }
-        std::cout << "qp: " << qp << " min distance: " << outgoing_evals[2*qp] << std::endl;
+        // std::cout << "qp: " << qp << " min distance: " << outgoing_evals[2*qp] << std::endl;
       }
     }
   }
@@ -500,7 +495,7 @@ MultiAppNearestNodeTransferJW::execute()
     unsigned int sys_num = to_sys->number();
     unsigned int var_num = to_sys->variable_number(_to_var_name);
 
-    NumericVector<Real> * solution = nullptr;
+    /*NumericVector<Real> * solution = nullptr;
     switch (_current_direction)
     {
       case TO_MULTIAPP:
@@ -512,7 +507,7 @@ MultiAppNearestNodeTransferJW::execute()
         break;
       default:
         mooseError("Unknown direction");
-    }
+    }*/
 
     const MeshBase & to_mesh = _to_meshes[i_to]->getMesh();
 
@@ -526,62 +521,12 @@ MultiAppNearestNodeTransferJW::execute()
 
     if (is_to_nodal)
     {
-      const std::vector<Node *> & target_local_nodes = getTargetLocalNodes(i_to);
-
-      for (const auto & node : target_local_nodes)
-      {
-        // Skip this node if the variable has no dofs at it.
-        if (node->n_dofs(sys_num, var_num) < 1)
-          continue;
-
-        // If nothing is in the node_index_map for a given local node,
-        // it will get the value 0.
-        Real best_val = 0;
-        if (!_neighbors_cached)
-        {
-          // Search through all the incoming evaluation points from
-          // different processors for the one with the closest
-          // point. If there are multiple values from other processors
-          // which are equidistant, the first one we check will "win".
-          Real min_dist = std::numeric_limits<Real>::max();
-          for (auto & evals : incoming_evals)
-          {
-            // processor Id
-            const processor_id_type pid = evals.first;
-            std::pair<unsigned int, dof_id_type> key(i_to, node->id());
-            if (node_index_map[pid].find(key) == node_index_map[pid].end())
-              continue;
-            unsigned int qp_ind = node_index_map[pid][key];
-            // Distances
-            if (evals.second[2 * qp_ind] >= min_dist)
-              continue;
-
-            // If we made it here, we are going to set a new value and
-            // distance because we found one that was closer.
-            min_dist = evals.second[2 * qp_ind];
-            best_val = evals.second[2 * qp_ind + 1];
-
-            if (_fixed_meshes)
-            {
-              // Cache these indices.
-              _cached_from_inds[std::make_pair(i_to, node->id())] = pid;
-              _cached_qp_inds[std::make_pair(i_to, node->id())] = qp_ind;
-            }
-          }
-        }
-
-        else
-        {
-          best_val = incoming_evals[_cached_from_inds[std::make_pair(i_to, node->id())]]
-                                   [_cached_qp_inds[std::make_pair(i_to, node->id())]];
-        }
-
-        dof_id_type dof = node->dof_number(sys_num, var_num, 0);
-        solution->set(dof, best_val);
-      }
+      // std::cout << "IN NODAL" << std::endl;
+      mooseError("is_to_nodal not implemented");
     }
     else // Elemental
     {
+      // std::cout << "IN ELEMENTAL" << std::endl;
       std::vector<Point> points;
       std::vector<dof_id_type> point_ids;
       for (auto & elem : to_mesh.active_local_element_ptr_range())
@@ -620,7 +565,7 @@ MultiAppNearestNodeTransferJW::execute()
         for (MooseIndex(points) offset = 0; offset < points.size(); offset++)
         {
           dof_id_type point_id = point_ids[offset];
-          Real best_val = 0;
+          // Real best_val = 0;
           if (!_neighbors_cached)
           {
             Real min_dist = std::numeric_limits<Real>::max();
@@ -637,28 +582,33 @@ MultiAppNearestNodeTransferJW::execute()
                 continue;
 
               min_dist = evals.second[2 * qp_ind];
-              best_val = evals.second[2 * qp_ind + 1];
+              // best_val = evals.second[2 * qp_ind + 1];
 
               if (_fixed_meshes)
               {
                 // Cache these indices.
+                // std::cout << "cached min dist here val: " << min_dist << std::endl;
+                // std::cout << " pid " <<pid << " qp_ind " << qp_ind << std::endl;
                 _cached_from_inds[std::make_pair(i_to, point_id)] = pid;
                 _cached_qp_inds[std::make_pair(i_to, point_id)] = qp_ind;
+                // _cached_min_dist[std::make_pair(i_to, point_id)] = min_dist;
+                _cached_min_dist[pid][qp_ind] = min_dist; // JW TODO: FIXME: does this just add the min dist for each pid? We need to broadcast the true min dist to all pids
+                // std::cout << "cached min dist here [val]: " << _cached_min_dist[pid][qp_ind] << " pid " <<pid << " qp_ind " << qp_ind << std::endl;
               } // if _fixed_meshes
             }   // i_from
           }     //
-          else
-          {
-            best_val = incoming_evals[_cached_from_inds[std::make_pair(i_to, point_id)]]
-                                     [_cached_qp_inds[std::make_pair(i_to, point_id)]];
-          }
-          dof_id_type dof = elem->dof_number(sys_num, var_num, offset);
-          solution->set(dof, best_val);
+          // else
+          // {
+          //   best_val = incoming_evals[_cached_from_inds[std::make_pair(i_to, point_id)]]
+          //                            [_cached_qp_inds[std::make_pair(i_to, point_id)]];
+          // }
+          // dof_id_type dof = elem->dof_number(sys_num, var_num, offset);
+          // solution->set(dof, best_val);
         } // for offset
       }
     }
-    solution->close();
-    to_sys->update();
+    // solution->close();
+    // to_sys->update();
   }
 
   // JW TODO: We found the nearest node distance on all processors
@@ -682,6 +632,387 @@ MultiAppNearestNodeTransferJW::execute()
 
   all steps 1-5 should be done only at start and the ids should be cached (_neighbors_cached = true)
   */
+
+  // std::cout << "about to find all points within min dist loop" << std::endl;
+
+  if (!_neighbors_cached)
+  {
+    // Build an array of pointers to all of this processor's local entities (nodes or
+    // elements).  We need to do this to avoid the expense of using LibMesh iterators.
+    // This step also takes care of limiting the search to boundary nodes, if
+    // applicable.
+    std::vector<std::vector<std::pair<Point, DofObject *>>> local_entities(
+        froms_per_proc[processor_id()]);
+
+    std::vector<std::vector<unsigned int>> local_comps(froms_per_proc[processor_id()]);
+
+    // Local array of all from Variable references
+    std::vector<std::reference_wrapper<MooseVariableFEBase>> _from_vars;
+    for (unsigned int i_local_from = 0; i_local_from < froms_per_proc[processor_id()];
+         i_local_from++)
+    {
+      MooseVariableFEBase & from_var = _from_problems[i_local_from]->getVariable(
+          0, _from_var_name, Moose::VarKindType::VAR_ANY, Moose::VarFieldType::VAR_FIELD_STANDARD);
+      auto & from_fe_type = from_var.feType();
+      bool is_constant = from_fe_type.order == CONSTANT;
+      bool is_to_nodal = from_fe_type.family == LAGRANGE;
+
+      // We support L2_LAGRANGE elemental variable with the first order
+      if (from_fe_type.order > FIRST && !is_to_nodal)
+        mooseError("We don't currently support second order or higher elemental variable ");
+
+      _from_vars.emplace_back(from_var);
+      getLocalEntitiesAndComponents(_from_meshes[i_local_from],
+                                    local_entities[i_local_from],
+                                    local_comps[i_local_from],
+                                    is_to_nodal,
+                                    is_constant);
+    }
+
+    // Quadrature points I will receive from remote processors
+    std::map<processor_id_type, std::vector<Point>> incoming_qps;
+    auto qps_action_functor = [&incoming_qps](processor_id_type pid, const std::vector<Point> & qps)
+    {
+      // Quadrature points from processor 'pid'
+      auto & incoming_qps_from_pid = incoming_qps[pid];
+      // Store data for late use
+      incoming_qps_from_pid.reserve(incoming_qps_from_pid.size() + qps.size());
+      std::copy(qps.begin(), qps.end(), std::back_inserter(incoming_qps_from_pid));
+    };
+
+    Parallel::push_parallel_vector_data(comm(), outgoing_qps, qps_action_functor);
+    for (auto & qps : incoming_qps) // TODO: THIS LOOP IS WHERE WE AVERAGE VALS
+    {
+      const processor_id_type pid = qps.first;
+
+      std::vector<Real> & outgoing_evals = processor_outgoing_evals[pid];
+      // Resize this vector to two times the size of the incoming_qps
+      // vector because we are going to store both the value from the nearest
+      // local node *and* the distance between the incoming_qp and that node
+      // for later comparison purposes.
+      outgoing_evals.resize(2 * qps.second.size());
+
+      for (std::size_t qp = 0; qp < qps.second.size(); qp++)
+      {
+        const Point & qpt = qps.second[qp];
+        outgoing_evals[2 * qp] = std::numeric_limits<Real>::max();
+        for (unsigned int i_local_from = 0; i_local_from < froms_per_proc[processor_id()];
+             i_local_from++)
+        {
+          MooseVariableFEBase & from_var = _from_vars[i_local_from];
+          System & from_sys = from_var.sys().system();
+          unsigned int from_sys_num = from_sys.number();
+          unsigned int from_var_num = from_sys.variable_number(from_var.name());
+          const auto from_global_num =
+              _current_direction == TO_MULTIAPP ? 0 : _from_local2global_map[i_local_from];
+          const auto & from_transform = *_from_transforms[from_global_num];
+
+          for (unsigned int i_node = 0; i_node < local_entities[i_local_from].size(); i_node++)
+          {
+            // Compute distance between the current incoming_qp (THM) to local node i_node (3D). No need to
+            // transform the 'to' because we already did it
+            Real current_distance =
+                (qpt - from_transform(local_entities[i_local_from][i_node].first)).norm();
+
+            // std::cout << "    qp: " << qp << " current distance: " << current_distance << std::endl;
+
+            // If an incoming_qp is equally close to two or more local nodes, then
+            // the first one we test will "win", even though any of the others could
+            // also potentially be chosen instead... there's no way to decide among
+            // the set of all equidistant points.
+            //
+            // outgoing_evals[2 * qp] is the current closest distance between a local point and
+            // the incoming_qp.
+            // std::cout << "try to access pid " <<pid << " qp_ind" << qp << std::endl;
+            if (current_distance < (_cached_min_dist[pid][qp] * _nearest_multiplier)) // TODO:, if distance < min_distance*2
+            {
+              // std::cout << "qp " << qp << " pos" << qpt << " dist " << current_distance << " is within cached min dist " << _cached_min_dist[pid][qp] 
+              // << " from point " << from_transform(local_entities[i_local_from][i_node].first) << std::endl;
+              // Assuming LAGRANGE!
+              if (local_entities[i_local_from][i_node].second->n_dofs(from_sys_num, from_var_num) >
+                  0)
+              {
+                dof_id_type from_dof = local_entities[i_local_from][i_node].second->dof_number(
+                    from_sys_num, from_var_num, local_comps[i_local_from][i_node]);
+
+                
+
+                
+                // The indexing of the outgoing_evals vector looks
+                // like [(distance, value), (distance, value), ...]
+                // for each incoming_qp. We only keep the value from
+                // the node with the smallest distance to the
+                // incoming_qp, and then we compare across all
+                // processors later and pick the closest one.
+                outgoing_evals[2 * qp] = current_distance;
+                outgoing_evals[2 * qp + 1] = (*from_sys.solution)(from_dof) * current_distance;
+
+                if (_fixed_meshes)
+                {
+                  // Cache the nearest nodes.
+                  _cached_froms[pid][qp] = i_local_from;
+                  _cached_dof_ids[pid][qp] = from_dof;
+                  // TODO: Not sure which info to store...? (i_node is a guess, need to check what all variables are)
+                  // std::cout << "adding to cache pid: " << pid << "  qp: " << qp << std::endl;
+                  _cached_nearby_from_dof_ids[pid][qp].push_back(from_dof); // TODO: here we need to store 2D/3D ID
+                  _cached_nearby_from_dof_dists[pid][qp].push_back(current_distance); // TODO: here we need to store 2D/3D ID
+                }
+              }
+            } // if dist < min_dist
+          } // for i_node  
+          // for (int k = 0; k < _cached_nearby_from_dof_ids[pid][qp].size(); ++k)
+          // {
+          //   std::cout << "qp " << qp << " _cached_nearby_from_dof_ids " << _cached_nearby_from_dof_ids[pid][qp][k] << std::endl;
+          //   std::cout << "qp " << qp << " _cached_nearby_from_dof_dists " << _cached_nearby_from_dof_dists[pid][qp][k] << std::endl;
+          // }
+        } // for i_local_from
+      } // for qp
+    } // for incoming_qps
+  } // if !neighbors_cached
+  /*
+  else // We've cached the nearest nodes (per processor)
+  {
+    for (auto & problem_from : _cached_froms)
+    {
+      const processor_id_type pid = problem_from.first;
+      std::vector<Real> & outgoing_evals = processor_outgoing_evals[pid];
+      outgoing_evals.resize(problem_from.second.size());
+
+      for (unsigned int qp = 0; qp < outgoing_evals.size(); qp++)
+      {
+        const auto from_problem = problem_from.second[qp];
+        if (from_problem == libMesh::invalid_uint)
+        {
+          mooseAssert(_cached_dof_ids[pid][qp] == DofObject::invalid_id,
+                      "The state of the from problem and dof id should match.");
+          continue;
+        }
+
+        MooseVariableFEBase & from_var =
+            _from_problems[from_problem]->getVariable(0,
+                                                      _from_var_name,
+                                                      Moose::VarKindType::VAR_ANY,
+                                                      Moose::VarFieldType::VAR_FIELD_STANDARD);
+        System & from_sys = from_var.sys().system();
+        dof_id_type from_dof = _cached_dof_ids[pid][qp]; // find dof corresponding to [problem][quadrature point]
+        outgoing_evals[qp] = (*from_sys.solution)(from_dof); // find value corresponding to [dof]
+      }
+    }
+  }
+  */
+
+  // std::cout << std::endl;
+
+  // Build an array of pointers to all of this processor's local entities (nodes or
+  // elements).  We need to do this to avoid the expense of using LibMesh iterators.
+  // This step also takes care of limiting the search to boundary nodes, if
+  // applicable.
+/*
+  std::vector<std::vector<std::pair<Point, DofObject *>>> local_entities(
+      froms_per_proc[processor_id()]);
+
+  std::vector<std::vector<unsigned int>> local_comps(froms_per_proc[processor_id()]);
+
+  // Local array of all from Variable references
+  std::vector<std::reference_wrapper<MooseVariableFEBase>> _from_vars;
+
+  for (unsigned int i_local_from = 0; i_local_from < froms_per_proc[processor_id()];
+        i_local_from++)
+  {
+    MooseVariableFEBase & from_var = _from_problems[i_local_from]->getVariable(
+        0, _from_var_name, Moose::VarKindType::VAR_ANY, Moose::VarFieldType::VAR_FIELD_STANDARD);
+    auto & from_fe_type = from_var.feType();
+    bool is_constant = from_fe_type.order == CONSTANT;
+    bool is_to_nodal = from_fe_type.family == LAGRANGE;
+
+    // We support L2_LAGRANGE elemental variable with the first order
+    if (from_fe_type.order > FIRST && !is_to_nodal)
+      mooseError("We don't currently support second order or higher elemental variable ");
+
+    _from_vars.emplace_back(from_var);
+    getLocalEntitiesAndComponents(_from_meshes[i_local_from],
+                                  local_entities[i_local_from],
+                                  local_comps[i_local_from],
+                                  is_to_nodal,
+                                  is_constant);
+  }
+*/
+
+  // std::cout << "entering loop to average and assign values" << std::endl;
+  for (unsigned int i_to = 0; i_to < _to_problems.size(); i_to++)
+  {
+    // Loop over the master nodes and set the value of the variable
+    System * to_sys = find_sys(*_to_es[i_to], _to_var_name);
+
+    unsigned int sys_num = to_sys->number();
+    unsigned int var_num = to_sys->variable_number(_to_var_name);
+
+    NumericVector<Real> * solution = nullptr;
+    switch (_current_direction)
+    {
+      case TO_MULTIAPP:
+        solution = &getTransferVector(i_to, _to_var_name);
+        break;
+      case FROM_MULTIAPP:
+        mooseError("not implemented for dev code: this assumes THM is always to app");
+        solution = to_sys->solution.get();
+        break;
+      default:
+        mooseError("Unknown direction");
+    }
+
+    const MeshBase & to_mesh = _to_meshes[i_to]->getMesh();
+
+    auto & fe_type = to_sys->variable_type(var_num);
+    bool is_constant = fe_type.order == CONSTANT;
+    bool is_to_nodal = fe_type.family == LAGRANGE;
+
+    // We support L2_LAGRANGE elemental variable with the first order
+    if (fe_type.order > FIRST && !is_to_nodal)
+      mooseError("We don't currently support second order or higher elemental variable ");
+
+    if (is_to_nodal)
+    {
+      // std::cout << "IN NODAL" << std::endl;
+      mooseError("is_to_nodal not implemented");
+    }
+    else // Elemental
+    {
+      // std::cout << "IN ELEMENTAL" << std::endl;
+      std::vector<Point> points;
+      std::vector<dof_id_type> point_ids;
+      for (auto & elem : to_mesh.active_local_element_ptr_range())
+      {
+        // Skip this element if the variable has no dofs at it.
+        if (elem->n_dofs(sys_num, var_num) < 1)
+          continue;
+
+        points.clear();
+        point_ids.clear();
+        // grap sample points
+        // for constant shape function, we take the element centroid
+        if (is_constant)
+        {
+          points.push_back(elem->vertex_average());
+          point_ids.push_back(elem->id());
+        }
+        // for higher order method, we take all nodes of element
+        // this works for the first order L2 Lagrange. Might not work
+        // with something higher than the first order
+        else
+          for (auto & node : elem->node_ref_range())
+          {
+            points.push_back(node);
+            point_ids.push_back(node.id());
+          }
+
+        unsigned int n_comp = elem->n_comp(sys_num, var_num);
+        // We assume each point corresponds to one component of elemental variable
+        if (points.size() != n_comp)
+          mooseError(" Number of points ",
+                     points.size(),
+                     " does not equal to number of variable components ",
+                     n_comp);
+
+        for (MooseIndex(points) offset = 0; offset < points.size(); offset++)
+        {
+          dof_id_type point_id = point_ids[offset];
+          // dof_id_type qp = point_ids[offset];
+          int qp = _cached_qp_inds[std::make_pair(i_to, point_id)];
+          // Real qp_val = 0.0;
+          Real sum_of_dists = 0.0;
+          Real sum_of_val_dist_product = 0.0;
+
+
+          // for (auto & evals : incoming_evals)
+          // {
+          // std::cout << "size _cached_froms = " << _cached_froms.size() << " offset = " << offset << std::endl;
+          for (auto & problem_from : _cached_froms)
+          {
+            // MooseVariableFEBase & from_var = _from_vars[0];
+            // const processor_id_type pid = evals.first;
+            const processor_id_type pid = problem_from.first;
+            std::vector<Real> & outgoing_evals = processor_outgoing_evals[pid];
+            outgoing_evals.resize(problem_from.second.size());
+            // std::cout << "in _cached_froms, outgoing_evals size " << outgoing_evals.size() << std::endl; 
+
+            // for (unsigned int qp = 0; qp < outgoing_evals.size(); qp++)
+            // {
+              // std::cout << "size of cache loop to check " << _cached_nearby_from_dof_ids[pid][qp].size() << std::endl;
+
+              // assume that "_cached_froms" only has 1 entry
+              // const auto from_problem = _cached_froms[pid].second[qp];
+              const auto from_problem = _cached_froms[pid][qp]; // FIXME: value in here seems to be wrong
+              // std::cout << "set from_problem " << from_problem << std::endl;
+              MooseVariableFEBase & from_var =
+                  _from_problems[from_problem]->getVariable(0,
+                                                            _from_var_name,
+                                                            Moose::VarKindType::VAR_ANY,
+                                                            Moose::VarFieldType::VAR_FIELD_STANDARD);
+              // std::cout << "set from_var " << std::endl;
+              System & from_sys = from_var.sys().system();
+              // std::cout << "set from_sys"<< std::endl;
+              // if (node_index_map[pid].find(key) == node_index_map[pid].end())
+              //   std::cout << "skipping node index map stuff, key not found " << std::endl;
+              //   continue;
+
+              // unsigned int qp_ind = node_index_map[pid][key];
+              int num_nearest_pts = _cached_nearby_from_dof_ids[pid][qp].size();
+              // int num_nearest_pts_dists = _cached_nearby_from_dof_dists[pid][qp].size();
+              // std::cout << "size of _cached_nearby_from_dof_ids[pid ="<<pid<< "][qp =" << qp << "] " << num_nearest_pts << " point_id = " << point_id << std::endl;
+              // std::cout << "size of _cached_nearby_from_dof_dists[pid ="<<pid<< "][qp =" << qp << "] " << num_nearest_pts_dists << std::endl;
+
+              for (int i = 0; i < num_nearest_pts; ++i)
+              {
+                Real dof_val = (*from_sys.solution)(_cached_nearby_from_dof_ids[pid][qp][i]);
+                std::cout 
+                  << " qp " << qp
+                  << " point " << point_id 
+                  << " dof " << _cached_nearby_from_dof_ids[pid][qp][i]
+                  << " pid " << pid
+                  << " val " << dof_val 
+                  << " out of N = " << num_nearest_pts << " nearby pts" << std::endl;
+                Real dof_dist = _cached_nearby_from_dof_dists[pid][qp][i];
+                // Real qp_dist = evals.second[2*qp_ind];
+                // Real qp_val = evals.second[2 * qp_ind + 1];
+
+                if (_distance_weighted_average)
+                {
+                  sum_of_dists = sum_of_dists + dof_dist;
+                  sum_of_val_dist_product = (dof_dist*dof_val) + sum_of_val_dist_product;
+                }
+                else
+                {
+                  sum_of_dists = sum_of_dists + 1;
+                  sum_of_val_dist_product = (1*dof_val) + sum_of_val_dist_product;
+                }
+
+
+                // std::cout << "     point " << qp 
+                // << " with dof " << _cached_nearby_from_dof_ids[pid][qp][i] 
+                // << " dist " << dof_dist 
+                // << " dof_val " << dof_val
+                // << std::endl;
+              }
+            // }
+          }
+
+          // NOTE: This was previously OUTSIDE the loop below (e.g swap the "}" and this")
+          // TODO: check for NaN here somewhere
+
+          Real val_to_send = sum_of_val_dist_product / sum_of_dists;
+          //  need to sum each processor val
+          dof_id_type dof = elem->dof_number(sys_num, var_num, offset);
+          // std::cout << "point " << qp << " dof " << dof << " sending " << val_to_send << std::endl; //" from pid: " << pid <<  std::endl;
+          solution->set(dof, val_to_send);
+        } // for offset
+      }
+    }
+    solution->close();
+    to_sys->update();
+  }
+
+
 
   if (_fixed_meshes)
     _neighbors_cached = true;
