@@ -218,6 +218,8 @@ public:
   virtual void resolveOptionalProperties() override;
 
 protected:
+  virtual void checkMaterialProperty(const std::string & name, const unsigned int state) override;
+
   virtual const MaterialData & materialData() const override { return _material_data; }
   virtual MaterialData & materialData() override { return _material_data; }
 
@@ -274,6 +276,14 @@ const GenericMaterialProperty<T, is_ad> &
 Material::getGenericMaterialPropertyByName(const std::string & prop_name_in,
                                            const unsigned int state)
 {
+  if (_use_interpolated_state)
+  {
+    if (state == 1)
+      return getGenericMaterialPropertyByName<T, is_ad>(prop_name_in + _interpolated_old, 0);
+    if (state == 2)
+      return getGenericMaterialPropertyByName<T, is_ad>(prop_name_in + _interpolated_older, 0);
+  }
+
   MaterialBase::checkExecutionStage();
 
   // The property may not exist yet, so declare it (declare/getMaterialProperty are referencing the

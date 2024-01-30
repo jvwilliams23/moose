@@ -187,7 +187,7 @@ public:
   /**
    * Get a TagID from a TagName.
    */
-  virtual TagID getMatrixTagID(const TagName & tag_name);
+  virtual TagID getMatrixTagID(const TagName & tag_name) const;
 
   /**
    * Retrieve the name associated with a TagID
@@ -197,12 +197,12 @@ public:
   /**
    * Check to see if a particular Tag exists
    */
-  virtual bool matrixTagExists(const TagName & tag_name);
+  virtual bool matrixTagExists(const TagName & tag_name) const;
 
   /**
    * Check to see if a particular Tag exists
    */
-  virtual bool matrixTagExists(TagID tag_id);
+  virtual bool matrixTagExists(TagID tag_id) const;
 
   /**
    * The total number of tags
@@ -789,9 +789,10 @@ public:
   bool automaticScaling() const;
 
   /**
-   * Tells this problem that assembly involves a scaling vector
+   * Tells this problem that the assembly associated with the given nonlinear system number involves
+   * a scaling vector
    */
-  void hasScalingVector();
+  void hasScalingVector(const unsigned int nl_sys_num);
 
   /**
    * Whether we have a displaced problem in our simulation
@@ -919,6 +920,24 @@ public:
    * Whether the simulation has nonlocal coupling which should be accounted for in the Jacobian
    */
   virtual bool hasNonlocalCoupling() const = 0;
+
+  /**
+   * Indicate whether the kind of adaptivity we're doing is p-refinement
+   * @param doing_p_refinement Whether we're doing p-refinement
+   * @param disable_p_refinement_for_families Families to disable p-refinement for
+   */
+  virtual void doingPRefinement(bool doing_p_refinement,
+                                const MultiMooseEnum & disable_p_refinement_for_families);
+
+  /**
+   * @returns whether the kind of adaptivity we're doing is p-refinement
+   */
+  [[nodiscard]] bool doingPRefinement() const;
+
+  /**
+   * Query whether p-refinement has been requested at any point during the simulation
+   */
+  [[nodiscard]] bool havePRefinement() const { return _have_p_refinement; }
 
 protected:
   /**
@@ -1101,6 +1120,9 @@ private:
   /// 0
   std::unordered_map<GhostingFunctor *, std::vector<std::shared_ptr<GhostingFunctor>>>
       _root_coupling_gf_to_sys_clones;
+
+  /// Whether p-refinement has been requested at any point during the simulation
+  bool _have_p_refinement;
 
   friend class Restartable;
 };

@@ -763,16 +763,13 @@ public:
   /*
    * These methods are here to retrieve parameters for scalar and vector types respectively. We will
    * throw errors
-   * when returning most scalar types, but will allow retrieving empty vectors.
+   * when returning most scalar and vector types.
    */
   template <typename T>
-  static const T &
-  getParamHelper(const std::string & name, const InputParameters & pars, const T * the_type);
-
-  template <typename T>
-  static const std::vector<T> & getParamHelper(const std::string & name,
-                                               const InputParameters & pars,
-                                               const std::vector<T> * the_type);
+  static const T & getParamHelper(const std::string & name,
+                                  const InputParameters & pars,
+                                  const T * the_type,
+                                  const MooseObject * moose_object = nullptr);
   ///@}
 
   using Parameters::get;
@@ -787,6 +784,11 @@ public:
                                                     MultiMooseEnum,
                                                     std::vector<R2>>::type>
   std::vector<std::pair<R1, R2>> get(const std::string & param1, const std::string & param2) const;
+
+  /**
+   * @returns list of all parameters
+   */
+  std::set<std::string> getParametersList() const;
 
   /**
    * Return list of controllable parameters
@@ -898,6 +900,7 @@ public:
    * @param old_name The old name of the parameter
    * @param new_name The new name of the parameter
    * @param new_docstring The new documentation string for the parameter
+   *                      If left empty, uses the old docstring for the renamed parameter
    */
   void renameParam(const std::string & old_name,
                    const std::string & new_name,
@@ -958,6 +961,7 @@ public:
   template <typename T>
   void transferParam(const InputParameters & source_param,
                      const std::string & name,
+                     const std::string & new_name = "",
                      const std::string & new_description = "");
 
   /**
@@ -984,7 +988,7 @@ private:
   void setParameters() {}
 
   /**
-   * Helper that uses overloading to distinguish adding commandline parameters of
+   * Helper that uses overloading to distinguish adding command-line parameters of
    * a scalar and a vector kind. Vector parameters are options that may appear multiple
    * times on the command line (like -i).
    */
@@ -1013,6 +1017,8 @@ private:
                                 const std::string & new_name,
                                 const std::string & docstring,
                                 const std::string & removal_date);
+
+  static void callMooseErrorHelper(const MooseObject & object, const std::string & error);
 
   struct Metadata
   {
@@ -1377,8 +1383,9 @@ InputParameters::addRequiredParam(const std::string & name, const std::string & 
   checkConsistentType<T>(name);
 
   InputParameters::insert<T>(name);
-  _params[name]._required = true;
-  _params[name]._doc_string = doc_string;
+  auto & metadata = _params[name];
+  metadata._required = true;
+  metadata._doc_string = doc_string;
 }
 
 template <typename T>
@@ -1399,7 +1406,8 @@ InputParameters::addParam(const std::string & name, const S & value, const std::
   checkConsistentType<T>(name);
 
   T & l_value = InputParameters::set<T>(name);
-  _params[name]._doc_string = doc_string;
+  auto & metadata = _params[name];
+  metadata._doc_string = doc_string;
 
   // Set the parameter now
   setParamHelper(name, l_value, value);
@@ -1407,7 +1415,7 @@ InputParameters::addParam(const std::string & name, const S & value, const std::
   /* Indicate the default value, as set via addParam, is being used. The parameter is removed from
      the list whenever
      it changes, see set_attributes */
-  _params[name]._set_by_add_param = true;
+  metadata._set_by_add_param = true;
 }
 
 template <typename T>
@@ -1499,9 +1507,10 @@ InputParameters::addDeprecatedCustomTypeParam(const std::string & name,
 {
   _show_deprecated_message = false;
   addParam<T>(name, doc_string);
-  _params[name]._custom_type = custom_type;
+  auto & metadata = _params[name];
+  metadata._custom_type = custom_type;
 
-  _params[name]._deprecation_message = deprecation_message;
+  metadata._deprecation_message = deprecation_message;
   _show_deprecated_message = true;
 }
 
@@ -1524,8 +1533,9 @@ InputParameters::addPrivateParam(const std::string & name, const T & value)
   checkConsistentType<T>(name);
 
   InputParameters::set<T>(name) = value;
-  _params[name]._is_private = true;
-  _params[name]._set_by_add_param = true;
+  auto & metadata = _params[name];
+  metadata._is_private = true;
+  metadata._set_by_add_param = true;
 }
 
 template <typename T>
@@ -1590,9 +1600,10 @@ InputParameters::suppressParameter(const std::string & name_in)
   if (!this->have_parameter<T>(name))
     mooseError("Unable to suppress nonexistent parameter: ", name);
 
-  _params[name]._required = false;
-  _params[name]._is_private = true;
-  _params[name]._controllable = false;
+  auto & metadata = _params[name];
+  metadata._required = false;
+  metadata._is_private = true;
+  metadata._controllable = false;
 }
 
 template <typename T>
@@ -1751,12 +1762,20 @@ template <typename T>
 const T &
 InputParameters::getParamHelper(const std::string & name_in,
                                 const InputParameters & pars,
-                                const T *)
+                                const T *,
+                                const MooseObject * moose_object /* = nullptr */)
 {
   const auto name = pars.checkForRename(name_in);
 
   if (!pars.isParamValid(name))
-    mooseError("The parameter \"", name, "\" is being retrieved before being set.\n");
+  {
+    std::stringstream err;
+    err << "The parameter \"" << name << "\" is being retrieved before being set.";
+    if (moose_object)
+      callMooseErrorHelper(*moose_object, err.str());
+    else
+      mooseError(err.str());
+  }
 
   return pars.get<T>(name);
 }
@@ -1765,25 +1784,18 @@ InputParameters::getParamHelper(const std::string & name_in,
 // implementation, but the definition will be in InputParameters.C so
 // we won't need to bring in *MooseEnum header files here.
 template <>
-const MooseEnum & InputParameters::getParamHelper<MooseEnum>(const std::string & name,
-                                                             const InputParameters & pars,
-                                                             const MooseEnum *);
+const MooseEnum &
+InputParameters::getParamHelper<MooseEnum>(const std::string & name,
+                                           const InputParameters & pars,
+                                           const MooseEnum *,
+                                           const MooseObject * moose_object /* = nullptr */);
 
 template <>
-const MultiMooseEnum & InputParameters::getParamHelper<MultiMooseEnum>(const std::string & name,
-                                                                       const InputParameters & pars,
-                                                                       const MultiMooseEnum *);
-
-template <typename T>
-const std::vector<T> &
-InputParameters::getParamHelper(const std::string & name_in,
-                                const InputParameters & pars,
-                                const std::vector<T> *)
-{
-  const auto name = pars.checkForRename(name_in);
-
-  return pars.get<std::vector<T>>(name);
-}
+const MultiMooseEnum &
+InputParameters::getParamHelper<MultiMooseEnum>(const std::string & name,
+                                                const InputParameters & pars,
+                                                const MultiMooseEnum *,
+                                                const MooseObject * moose_object /* = nullptr */);
 
 template <typename R1, typename R2, typename V1, typename V2>
 std::vector<std::pair<R1, R2>>
@@ -1856,14 +1868,17 @@ template <typename T>
 void
 InputParameters::transferParam(const InputParameters & source_params,
                                const std::string & name_in,
+                               const std::string & new_name,
                                const std::string & new_description)
 {
   const auto name = source_params.checkForRename(std::string(name_in));
+  const auto p_name = new_name.empty() ? name_in : new_name;
   if (!source_params.have_parameter<T>(name) && !source_params.hasCoupledValue(name))
-    mooseError(
-        "The '",
-        name_in,
-        "' parameter could not be transferred because it does not exist in the source parameters");
+    mooseError("The '",
+               name_in,
+               "' parameter could not be transferred because it does not exist with type '",
+               MooseUtils::prettyCppType<T>(),
+               "' in the source parameters");
   if (name != name_in)
     mooseWarning("The transferred parameter " + name_in + " is deprecated in favor of " + name +
                  " in the source parameters. The new name should likely be used for the parameter "
@@ -1873,18 +1888,17 @@ InputParameters::transferParam(const InputParameters & source_params,
 
   if (source_params.isParamRequired(name))
   {
-    // Use the name_in that was specified in the transfer
     // Check for a variable parameter
     if (source_params.hasCoupledValue(name))
-      addRequiredCoupledVar(name_in, description);
+      addRequiredCoupledVar(p_name, description);
     // Enums parameters have a default list of options
     else if constexpr (std::is_same_v<MooseEnum, T> || std::is_same_v<MultiMooseEnum, T>)
-      addRequiredParam<T>(name_in, source_params.get<T>(name), description);
+      addRequiredParam<T>(p_name, source_params.get<T>(name), description);
     else if (source_params.isRangeChecked(name))
       addRequiredRangeCheckedParam<T>(
-          name_in, source_params.rangeCheckedFunction(name), description);
+          p_name, source_params.rangeCheckedFunction(name), description);
     else
-      addRequiredParam<T>(name_in, description);
+      addRequiredParam<T>(p_name, description);
   }
   else
   {
@@ -1892,41 +1906,41 @@ InputParameters::transferParam(const InputParameters & source_params,
     if (source_params.hasCoupledValue(name))
     {
       if (!source_params.hasDefaultCoupledValue(name))
-        addCoupledVar(name_in, description);
+        addCoupledVar(p_name, description);
       else if (source_params.numberDefaultCoupledValues(name) == 1)
-        addCoupledVar(name_in, source_params.defaultCoupledValue(name), description);
+        addCoupledVar(p_name, source_params.defaultCoupledValue(name), description);
       else
       {
         std::vector<Real> coupled_values;
         for (const auto i : make_range(source_params.numberDefaultCoupledValues(name)))
           coupled_values.push_back(source_params.defaultCoupledValue(name, i));
-        addCoupledVar(name_in, coupled_values, description);
+        addCoupledVar(p_name, coupled_values, description);
       }
     }
     else if (source_params.isRangeChecked(name))
     {
       if (source_params.hasDefault(name))
-        addRangeCheckedParam<T>(name_in,
+        addRangeCheckedParam<T>(p_name,
                                 source_params.get<T>(name),
                                 source_params.rangeCheckedFunction(name),
                                 description);
       else
-        addRangeCheckedParam<T>(name_in, source_params.rangeCheckedFunction(name), description);
+        addRangeCheckedParam<T>(p_name, source_params.rangeCheckedFunction(name), description);
     }
     else if constexpr (std::is_same_v<MooseEnum, T> || std::is_same_v<MultiMooseEnum, T>)
-      addParam<T>(name_in, source_params.get<T>(name_in), description);
+      addParam<T>(p_name, source_params.get<T>(name), description);
     else
     {
       if (source_params.hasDefault(name))
-        addParam<T>(name_in, source_params.get<T>(name), description);
+        addParam<T>(p_name, source_params.get<T>(name), description);
       else
-        addParam<T>(name_in, description);
+        addParam<T>(p_name, description);
     }
   }
 
   // Copy other attributes
   if (source_params.isPrivate(name))
-    _params[name_in]._is_private = true;
+    _params[p_name]._is_private = true;
   if (source_params.isControllable(name))
-    _params[name_in]._controllable = true;
+    _params[p_name]._controllable = true;
 }

@@ -15,6 +15,7 @@
 #include "MooseUtils.h"
 #include "MultiMooseEnum.h"
 #include "ExecFlagEnum.h"
+#include "MooseObject.h"
 
 #include "libmesh/utility.h"
 #include "libmesh/simple_range.h"
@@ -84,17 +85,18 @@ InputParameters::set_attributes(const std::string & name_in, bool inserted_only)
 
   if (!inserted_only)
   {
+    auto & metadata = _params[name];
     /**
      * "._set_by_add_param" and ".deprecated_params" are not populated until after
      * the default value has already been set in libMesh (first callback to this
      * method). Therefore if a variable is in/not in one of these sets, you can
      * be assured it was put there outside of the "addParam*()" calls.
      */
-    _params[name]._set_by_add_param = false;
+    metadata._set_by_add_param = false;
 
     // valid_params don't make sense for MooseEnums
     if (!have_parameter<MooseEnum>(name) && !have_parameter<MultiMooseEnum>(name))
-      _params[name]._valid = true;
+      metadata._valid = true;
   }
 }
 
@@ -219,8 +221,9 @@ InputParameters::addCoupledVar(const std::string & name, Real value, const std::
 {
   addParam<std::vector<VariableName>>(name, doc_string);
   _coupled_vars.insert(name);
-  _params[name]._coupled_default.assign(1, value);
-  _params[name]._have_coupled_default = true;
+  auto & metadata = _params[name];
+  metadata._coupled_default.assign(1, value);
+  metadata._have_coupled_default = true;
 
   // Set the doc string for any associated deprecated coupled var
   setDeprecatedVarDocString(name, doc_string);
@@ -234,8 +237,9 @@ InputParameters::addCoupledVar(const std::string & name,
   // std::vector<VariableName>(1, Moose::stringify(value)),
   addParam<std::vector<VariableName>>(name, doc_string);
   _coupled_vars.insert(name);
-  _params[name]._coupled_default = value;
-  _params[name]._have_coupled_default = true;
+  auto & metadata = _params[name];
+  metadata._coupled_default = value;
+  metadata._have_coupled_default = true;
 
   // Set the doc string for any associated deprecated coupled var
   setDeprecatedVarDocString(name, doc_string);
@@ -927,9 +931,9 @@ InputParameters::applyParameter(const InputParameters & common,
   const bool common_priv = allow_private ? false : common.isPrivate(common_name);
   const bool common_valid = common.isParamValid(common_name);
 
-  /* In order to apply common parameter 4 statements must be satisfied
-   * (1) A local parameter must exist with the same name as common parameter
-   * (2) Common parameter must valid and exist
+  /* In order to apply a common parameter 4 statements must be satisfied
+   * (1) A local parameter must exist with the same name as the common parameter
+   * (2) Common parameter must be valid and exist
    * (3) Local parameter must be invalid OR not have been set from its default
    * (4) Both cannot be private
    */
@@ -986,8 +990,9 @@ InputParameters::addRequiredParam<MooseEnum>(const std::string & name,
                                              const std::string & doc_string)
 {
   InputParameters::set<MooseEnum>(name) = moose_enum; // valid parameter is set by set_attributes
-  _params[name]._required = true;
-  _params[name]._doc_string = doc_string;
+  auto & metadata = _params[name];
+  metadata._required = true;
+  metadata._doc_string = doc_string;
 }
 
 template <>
@@ -998,8 +1003,9 @@ InputParameters::addRequiredParam<MultiMooseEnum>(const std::string & name,
 {
   InputParameters::set<MultiMooseEnum>(name) =
       moose_enum; // valid parameter is set by set_attributes
-  _params[name]._required = true;
-  _params[name]._doc_string = doc_string;
+  auto & metadata = _params[name];
+  metadata._required = true;
+  metadata._doc_string = doc_string;
 }
 
 template <>
@@ -1011,8 +1017,9 @@ InputParameters::addRequiredParam<std::vector<MooseEnum>>(
 {
   InputParameters::set<std::vector<MooseEnum>>(name) =
       moose_enums; // valid parameter is set by set_attributes
-  _params[name]._required = true;
-  _params[name]._doc_string = doc_string;
+  auto & metadata = _params[name];
+  metadata._required = true;
+  metadata._doc_string = doc_string;
 }
 
 template <>
@@ -1189,7 +1196,8 @@ template <>
 const MooseEnum &
 InputParameters::getParamHelper<MooseEnum>(const std::string & name_in,
                                            const InputParameters & pars,
-                                           const MooseEnum *)
+                                           const MooseEnum *,
+                                           const MooseObject * /* = nullptr */)
 {
   const auto name = pars.checkForRename(name_in);
   return pars.get<MooseEnum>(name);
@@ -1199,7 +1207,8 @@ template <>
 const MultiMooseEnum &
 InputParameters::getParamHelper<MultiMooseEnum>(const std::string & name_in,
                                                 const InputParameters & pars,
-                                                const MultiMooseEnum *)
+                                                const MultiMooseEnum *,
+                                                const MooseObject * /* = nullptr */)
 {
   const auto name = pars.checkForRename(name_in);
   return pars.get<MultiMooseEnum>(name);
@@ -1249,6 +1258,15 @@ InputParameters::getGroupParameters(const std::string & group) const
     if (it->second._group == group)
       names.emplace(it->first);
   return names;
+}
+
+std::set<std::string>
+InputParameters::getParametersList() const
+{
+  std::set<std::string> param_set;
+  for (auto it = _params.begin(); it != _params.end(); ++it)
+    param_set.emplace(it->first);
+  return param_set;
 }
 
 std::set<std::string>
@@ -1316,6 +1334,8 @@ InputParameters::renameParamInternal(const std::string & old_name,
   auto new_metadata = std::move(params_it->second);
   if (!docstring.empty())
     new_metadata._doc_string = docstring;
+  else
+    new_metadata._doc_string = params_it->second._doc_string;
   _params.emplace(new_name, std::move(new_metadata));
   _params.erase(params_it);
 
@@ -1403,4 +1423,10 @@ InputParameters::paramAliases(const std::string & param_name) const
     aliases.push_back(pr.second);
 
   return aliases;
+}
+
+void
+InputParameters::callMooseErrorHelper(const MooseObject & object, const std::string & error)
+{
+  object.mooseError(error);
 }

@@ -347,18 +347,7 @@ journal = {Earthquake Engineering and Structural Dynamics},
 
 ### Electromagnetics Module
 
-The following PhD dissertation documents the initial development, function, verification, and validation
-of the electromagnetics module.
-
-```
-@phdthesis{icenhour2023electromagnetics,
-  author = {Icenhour, Casey T.},
-  title = {Development and Validation of Open Source Software for Electromagnetics Simulation and Multiphysics Coupling},
-  school = {North Carolina State University},
-  year = {2023},
-  url = {https://www.lib.ncsu.edu/resolver/1840.20/40985}
-}
-```
+!include modules/electromagnetics/index.md start=em-citation-start end=em-citation-end
 
 ### Stochastic Tools Module
 
