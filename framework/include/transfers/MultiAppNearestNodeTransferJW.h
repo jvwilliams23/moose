@@ -65,6 +65,8 @@ protected:
 
   /// If true then node connections will be cached
   bool _fixed_meshes;
+  bool _distance_weighted_average;
+  Real _nearest_multiplier;
 
   /// Used to cache nodes
   std::map<dof_id_type, Node *> & _node_map;
@@ -78,6 +80,14 @@ protected:
   std::map<processor_id_type, std::vector<dof_id_type>> & _cached_dof_ids;
   std::map<std::pair<unsigned int, dof_id_type>, unsigned int> & _cached_from_inds;
   std::map<std::pair<unsigned int, dof_id_type>, unsigned int> & _cached_qp_inds;
+
+  // std::vector<float> & _cached_min_dist;
+  // std::map<processor_id_type, std::vector<Real>> & _cached_dof_dist;
+  // std::map<std::pair<unsigned int, dof_id_type>, Real> & _cached_min_dist;
+  std::map<processor_id_type, std::vector<Real>> & _cached_min_dist;
+  std::map<processor_id_type, std::vector<std::vector<dof_id_type>>> & _cached_nearby_from_dof_ids;
+  std::map<processor_id_type, std::vector<std::vector<Real>>> & _cached_nearby_from_dof_dists;
+  // std::map<std::pair<unsigned int, dof_id_type>, unsigned int> & _cached_qp_inds_in_dist; // this one may need an extra dimension? because we should save a list of ints, not just one int
 
 private:
   bool usesMooseAppCoordTransform() const override { return true; }
