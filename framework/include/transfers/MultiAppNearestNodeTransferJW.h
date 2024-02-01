@@ -85,6 +85,7 @@ protected:
   // std::map<processor_id_type, std::vector<Real>> & _cached_dof_dist;
   // std::map<std::pair<unsigned int, dof_id_type>, Real> & _cached_min_dist;
   std::map<processor_id_type, std::vector<Real>> & _cached_min_dist;
+  std::map<std::pair<unsigned int, dof_id_type>, Real> & _cached_min_dist_dev;
   std::map<processor_id_type, std::vector<std::vector<dof_id_type>>> & _cached_nearby_from_dof_ids;
   std::map<processor_id_type, std::vector<std::vector<Real>>> & _cached_nearby_from_dof_dists;
   // std::map<std::pair<unsigned int, dof_id_type>, unsigned int> & _cached_qp_inds_in_dist; // this one may need an extra dimension? because we should save a list of ints, not just one int

@@ -83,6 +83,9 @@ MultiAppNearestNodeTransferJW::MultiAppNearestNodeTransferJW(const InputParamete
     _cached_min_dist(
         declareRestartableData<std::map<processor_id_type, std::vector<Real>>>(
             "cached_min_dist")),
+    _cached_min_dist_dev(
+        declareRestartableData<std::map<std::pair<unsigned int, dof_id_type>, Real>>(
+            "cached_min_dist_dev")),
     _cached_nearby_from_dof_ids(declareRestartableData<std::map<processor_id_type, std::vector<std::vector<dof_id_type>>>>(
         "cached_ids_within_min_dist")),
     _cached_nearby_from_dof_dists(declareRestartableData<std::map<processor_id_type, std::vector<std::vector<Real>>>>(
