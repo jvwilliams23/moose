@@ -772,77 +772,16 @@ MultiAppNearestNodeTransferJW::execute()
           // }
         } // for i_local_from
       } // for qp
+    }
     } // for incoming_qps
   } // if !neighbors_cached
-  /*
-  else // We've cached the nearest nodes (per processor)
-  {
-    for (auto & problem_from : _cached_froms)
-    {
-      const processor_id_type pid = problem_from.first;
-      std::vector<Real> & outgoing_evals = processor_outgoing_evals[pid];
-      outgoing_evals.resize(problem_from.second.size());
-
-      for (unsigned int qp = 0; qp < outgoing_evals.size(); qp++)
-      {
-        const auto from_problem = problem_from.second[qp];
-        if (from_problem == libMesh::invalid_uint)
-        {
-          mooseAssert(_cached_dof_ids[pid][qp] == DofObject::invalid_id,
-                      "The state of the from problem and dof id should match.");
-          continue;
-        }
-
-        MooseVariableFEBase & from_var =
-            _from_problems[from_problem]->getVariable(0,
-                                                      _from_var_name,
-                                                      Moose::VarKindType::VAR_ANY,
-                                                      Moose::VarFieldType::VAR_FIELD_STANDARD);
-        System & from_sys = from_var.sys().system();
-        dof_id_type from_dof = _cached_dof_ids[pid][qp]; // find dof corresponding to [problem][quadrature point]
-        outgoing_evals[qp] = (*from_sys.solution)(from_dof); // find value corresponding to [dof]
-      }
-    }
-  }
-  */
-
-  // std::cout << std::endl;
 
   // Build an array of pointers to all of this processor's local entities (nodes or
   // elements).  We need to do this to avoid the expense of using LibMesh iterators.
   // This step also takes care of limiting the search to boundary nodes, if
   // applicable.
-/*
-  std::vector<std::vector<std::pair<Point, DofObject *>>> local_entities(
-      froms_per_proc[processor_id()]);
 
-  std::vector<std::vector<unsigned int>> local_comps(froms_per_proc[processor_id()]);
-
-  // Local array of all from Variable references
-  std::vector<std::reference_wrapper<MooseVariableFEBase>> _from_vars;
-
-  for (unsigned int i_local_from = 0; i_local_from < froms_per_proc[processor_id()];
-        i_local_from++)
-  {
-    MooseVariableFEBase & from_var = _from_problems[i_local_from]->getVariable(
-        0, _from_var_name, Moose::VarKindType::VAR_ANY, Moose::VarFieldType::VAR_FIELD_STANDARD);
-    auto & from_fe_type = from_var.feType();
-    bool is_constant = from_fe_type.order == CONSTANT;
-    bool is_to_nodal = from_fe_type.family == LAGRANGE;
-
-    // We support L2_LAGRANGE elemental variable with the first order
-    if (from_fe_type.order > FIRST && !is_to_nodal)
-      mooseError("We don't currently support second order or higher elemental variable ");
-
-    _from_vars.emplace_back(from_var);
-    getLocalEntitiesAndComponents(_from_meshes[i_local_from],
-                                  local_entities[i_local_from],
-                                  local_comps[i_local_from],
-                                  is_to_nodal,
-                                  is_constant);
-  }
-*/
-
+  printf("\n\n");
   // std::cout << "entering loop to average and assign values" << std::endl;
   std::cout << "_to_problems size " << _to_problems.size() << std::endl;
   for (unsigned int i_to = 0; i_to < _to_problems.size(); i_to++)
