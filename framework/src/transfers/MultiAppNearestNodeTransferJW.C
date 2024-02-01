@@ -323,15 +323,23 @@ MultiAppNearestNodeTransferJW::execute()
 
     Parallel::push_parallel_vector_data(comm(), outgoing_qps, qps_action_functor);
 
+    // for (auto & qps : outgoing_qps) // TODO: THIS LOOP IS WHERE WE GET THE NEAREST NODES
     for (auto & qps : incoming_qps) // TODO: THIS LOOP IS WHERE WE GET THE NEAREST NODES
     {
       const processor_id_type pid = qps.first;
-
+      if (pid == comm().rank())
+      {
+        
       if (_fixed_meshes)
       {
+        printf("setting caches for incoming qps, pid = %i \n", pid);
         auto & froms = _cached_froms[pid];
-        froms.resize(qps.second.size());
-        std::fill(froms.begin(), froms.end(), libMesh::invalid_uint);
+        if (froms.size() != qps.second.size())
+        {
+          printf("froms size, %i != qps size, %i.... setting new empty arr \n", froms.size(), qps.second.size());
+          froms.resize(qps.second.size());
+          std::fill(froms.begin(), froms.end(), libMesh::invalid_uint);
+        }
 
         auto & dof_ids = _cached_dof_ids[pid];
         dof_ids.resize(qps.second.size());
@@ -339,7 +347,7 @@ MultiAppNearestNodeTransferJW::execute()
 
         auto & min_dists = _cached_min_dist[pid];
         min_dists.resize(qps.second.size());
-        std::fill(min_dists.begin(), min_dists.end(), 0.0);
+        std::fill(min_dists.begin(), min_dists.end(), 1000.0);
         
         auto & min_dist_ids = _cached_nearby_from_dof_ids[pid];
         min_dist_ids.resize(qps.second.size());
@@ -369,6 +377,9 @@ MultiAppNearestNodeTransferJW::execute()
              i_local_from++)
         {
           std::cout << "i_local_from = " << i_local_from << std::endl;
+          printf("printf i_local_from = %i\n", i_local_from);
+          std::cout << "processor_id = " << processor_id() << std::endl;
+          printf("printf processor_id = %i\n", processor_id());
           MooseVariableFEBase & from_var = _from_vars[i_local_from];
           System & from_sys = from_var.sys().system();
           unsigned int from_sys_num = from_sys.number();
@@ -439,7 +450,7 @@ MultiAppNearestNodeTransferJW::execute()
         }
         // std::cout << "qp: " << qp << " min distance: " << outgoing_evals[2*qp] << std::endl;
       }
-      }
+    }
     }
   }
 
@@ -493,7 +504,7 @@ MultiAppNearestNodeTransferJW::execute()
   printf("\n\n");
   // if (comm().rank() == 0 )
   // {
-
+    
   for (unsigned int i_to = 0; i_to < _to_problems.size(); i_to++)
   {
     // Loop over the master nodes and set the value of the variable
@@ -615,7 +626,7 @@ MultiAppNearestNodeTransferJW::execute()
                 );
 
                 _cached_from_inds[std::make_pair(i_to, point_id)] = pid;
-                _cached_qp_inds[std::make_pair(i_to, point_id)] = qp_ind;
+                _cached_qp_inds[std::make_pair(i_to, point_id)] = qp_ind; 
                 _cached_min_dist_dev[std::make_pair(i_to, point_id)] = min_dist;
                 _cached_min_dist[pid][qp_ind] = min_dist; // JW TODO: FIXME: does this just add the min dist for each pid? We need to broadcast the true min dist to all pids
                 // std::cout << "cached min dist here [val]: " << _cached_min_dist[pid][qp_ind] << " pid " <<pid << " qp_ind " << qp_ind << std::endl;
@@ -705,9 +716,12 @@ MultiAppNearestNodeTransferJW::execute()
     };
 
     Parallel::push_parallel_vector_data(comm(), outgoing_qps, qps_action_functor);
+    // for (auto & qps : outgoing_qps) // TODO: THIS LOOP IS WHERE WE AVERAGE VALS
     for (auto & qps : incoming_qps) // TODO: THIS LOOP IS WHERE WE AVERAGE VALS
     {
       const processor_id_type pid = qps.first;
+      if (comm().rank() == pid)
+      {
 
       std::vector<Real> & outgoing_evals = processor_outgoing_evals[pid];
       // Resize this vector to two times the size of the incoming_qps
@@ -738,8 +752,6 @@ MultiAppNearestNodeTransferJW::execute()
             Real current_distance =
                 (qpt - from_transform(local_entities[i_local_from][i_node].first)).norm();
 
-            // std::cout << "    qp: " << qp << " current distance: " << current_distance << std::endl;
-
             // If an incoming_qp is equally close to two or more local nodes, then
             // the first one we test will "win", even though any of the others could
             // also potentially be chosen instead... there's no way to decide among
@@ -759,9 +771,7 @@ MultiAppNearestNodeTransferJW::execute()
                 dof_id_type from_dof = local_entities[i_local_from][i_node].second->dof_number(
                     from_sys_num, from_var_num, local_comps[i_local_from][i_node]);
 
-                
 
-                
                 // The indexing of the outgoing_evals vector looks
                 // like [(distance, value), (distance, value), ...]
                 // for each incoming_qp. We only keep the value from
@@ -790,11 +800,6 @@ MultiAppNearestNodeTransferJW::execute()
               }
             } // if dist < min_dist
           } // for i_node  
-          // for (int k = 0; k < _cached_nearby_from_dof_ids[pid][qp].size(); ++k)
-          // {
-          //   std::cout << "qp " << qp << " _cached_nearby_from_dof_ids " << _cached_nearby_from_dof_ids[pid][qp][k] << std::endl;
-          //   std::cout << "qp " << qp << " _cached_nearby_from_dof_dists " << _cached_nearby_from_dof_dists[pid][qp][k] << std::endl;
-          // }
         } // for i_local_from
       } // for qp
     }
@@ -998,7 +1003,25 @@ MultiAppNearestNodeTransferJW::execute()
     to_sys->update();
   }
 
-
+  unsigned int from0 = 0;
+  // if (comm().rank() == 0 )
+  // {
+  std::cout << "check all cache contents" << std::endl;
+  for (processor_id_type i_proc = 0; i_proc < n_processors(); i_proc++)
+  {
+    for (int qp=0; qp<_cached_min_dist[i_proc].size(); qp++)
+    {
+      printf(
+        "proc %i, min_dist %f \n",
+        i_proc, _cached_min_dist[i_proc, qp]
+      );
+      for (int j=0; j<_cached_nearby_from_dof_ids[i_proc][qp].size(); j++)
+      {
+        printf(" nearby dof is %i \n", _cached_nearby_from_dof_ids[i_proc][qp][j]);
+      }
+    }
+  }
+  // }
 
   if (_fixed_meshes)
     _neighbors_cached = true;
