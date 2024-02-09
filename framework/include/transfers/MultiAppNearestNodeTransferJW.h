@@ -67,6 +67,7 @@ protected:
   bool _fixed_meshes;
   bool _distance_weighted_average;
   Real _nearest_multiplier;
+  Real _nearest_offset;
 
   /// Used to cache nodes
   std::map<dof_id_type, Node *> & _node_map;
